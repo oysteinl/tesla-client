@@ -142,6 +142,7 @@ func fetchDataAndPublishState() {
 	vehicleStatus, err := requestVehicleStatus()
 	if err != nil {
 		if errors.Is(err, ErrAuth) {
+			log.Info("Invalid auth, updating token")
 			token, err := fetchAccessToken()
 			if err != nil {
 				log.Error(err)
@@ -154,14 +155,25 @@ func fetchDataAndPublishState() {
 				return
 			}
 		} else if errors.Is(err, ErrOffline) {
-			log.Info("Vehicle offline")
+			log.Info("Vehicle offline, backing off")
 			return
 		} else {
 			log.Error(err)
 			return
 		}
 	}
-	publishVehicleStatus(vehicleStatus)
+	if cache.Response.ChargeState.UsableBatteryLevel != vehicleStatus.Response.ChargeState.UsableBatteryLevel || cache.Response.ChargeState.ChargingState != vehicleStatus.Response.ChargeState.ChargingState {
+		cache = vehicleStatus
+		publishVehicleStatus(vehicleStatus)
+	} else {
+		log.Info("Fetched values equal cached values, not publishing")
+	}
+}
+
+var cache = vehicleStatus{
+	Response: response{
+		ChargeState: chargeState{
+			ChargingState: "", UsableBatteryLevel: -1}},
 }
 
 func fetchAccessToken() (string, error) {
@@ -244,6 +256,9 @@ type attributes struct {
 }
 
 func publishVehicleStatus(vehicleStatus vehicleStatus) {
+	log.Infof("Publishing to queue: BatteryState=%d, Charging=%s",
+		vehicleStatus.Response.ChargeState.UsableBatteryLevel,
+		vehicleStatus.Response.ChargeState.ChargingState)
 	attributes := attributes{Charging: vehicleStatus.Response.ChargeState.ChargingState == "Charging"}
 	attributeAsJson, _ := json.Marshal(attributes)
 	mqttClient.Publish("/tesla/state/battery", 1, true, fmt.Sprintf("%d", vehicleStatus.Response.ChargeState.UsableBatteryLevel))
