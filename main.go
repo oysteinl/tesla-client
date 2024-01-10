@@ -1,11 +1,10 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
+	"github.com/oysteinl/tesla-client/service"
 	"os"
 	"sync"
 	"time"
@@ -32,9 +31,6 @@ var mqttPassExists bool
 
 var accessToken string
 var mqttClient mqtt.Client
-
-var ErrAuth = errors.New("invalid auth")
-var ErrOffline = errors.New("vehicle is offline")
 
 var homeAndAwayTracker HomeAndAwayTracker
 
@@ -80,11 +76,12 @@ func main() {
 	log.Info("Starting tesla-client")
 	keepAlive := make(chan os.Signal)
 	listen()
+	defer mqttClient.Disconnect(500)
 	<-keepAlive
 }
 
 func listen() {
-	mqttClient = connectMQTT("teslaClient")
+	mqttClient = service.ConnectMQTT("teslaClient", mqttUser, mqttPass, mqttUrl)
 	mqttClient.Subscribe(mqttAliveTopic, 0, mqttAliveCallback)
 }
 
@@ -110,7 +107,7 @@ func mqttAliveCallback(_ mqtt.Client, msg mqtt.Message) {
 					log.Debug("Ticker stopped")
 					return
 				case <-ticker.C:
-					log.Debugf("Tick received")
+					log.Debug("Tick received")
 					fetchDataAndPublishState()
 				}
 			}
@@ -121,9 +118,7 @@ func mqttAliveCallback(_ mqtt.Client, msg mqtt.Message) {
 			return //Already away
 		}
 		//Cancel scheduled fetches
-		log.Debugf("Stopping ticker")
 		done <- true
-		log.Debugf("Done sent")
 		homeAndAwayTracker.SetHome(false)
 	}
 }
@@ -131,30 +126,30 @@ func mqttAliveCallback(_ mqtt.Client, msg mqtt.Message) {
 func fetchDataAndPublishState() {
 	log.Info("Fetching vehicle status")
 	if accessToken == "" {
-		token, err := fetchAccessToken()
+		token, err := service.FetchAccessToken(refreshToken, refreshTokenUrl)
 		if err != nil {
 			log.Error(err)
 		} else {
 			accessToken = token
 		}
 	}
-	var vehicleStatus vehicleStatus
-	vehicleStatus, err := requestVehicleStatus()
+	var vehicleStatus service.VehicleStatus
+	vehicleStatus, err := service.RequestVehicleStatus(accessToken, vehicleUrl)
 	if err != nil {
-		if errors.Is(err, ErrAuth) {
+		if errors.Is(err, service.ErrAuth) {
 			log.Info("Invalid auth, updating token")
-			token, err := fetchAccessToken()
+			token, err := service.FetchAccessToken(refreshToken, refreshTokenUrl)
 			if err != nil {
 				log.Error(err)
 				return
 			}
 			accessToken = token
-			vehicleStatus, err = requestVehicleStatus()
+			vehicleStatus, err = service.RequestVehicleStatus(accessToken, vehicleUrl)
 			if err != nil {
 				log.Error(err)
 				return
 			}
-		} else if errors.Is(err, ErrOffline) {
+		} else if errors.Is(err, service.ErrOffline) {
 			log.Info("Vehicle offline, backing off")
 			return
 		} else {
@@ -162,100 +157,14 @@ func fetchDataAndPublishState() {
 			return
 		}
 	}
-	if cache.Response.ChargeState.UsableBatteryLevel != vehicleStatus.Response.ChargeState.UsableBatteryLevel || cache.Response.ChargeState.ChargingState != vehicleStatus.Response.ChargeState.ChargingState {
-		cache = vehicleStatus
-		publishVehicleStatus(vehicleStatus)
-	} else {
-		log.Info("Fetched values equal cached values, not publishing")
-	}
-}
-
-var cache = vehicleStatus{
-	Response: response{
-		ChargeState: chargeState{
-			ChargingState: "", UsableBatteryLevel: -1}},
-}
-
-func fetchAccessToken() (string, error) {
-	body := body{
-		GrantType:    "refresh_token",
-		ClientId:     "ownerapi",
-		RefreshToken: refreshToken,
-		Scope:        "openid email offline_access",
-	}
-	jsonData, err := json.Marshal(body)
-	if err != nil {
-		return "", err
-	}
-	request, err := http.NewRequest("POST", refreshTokenUrl, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return "", err
-	}
-	request.Header.Set("Content-Type", "application/json")
-	client := &http.Client{}
-	response, err := client.Do(request)
-	if err != nil {
-		return "", err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return "", errors.New("Error: Unexpected status code: " + response.Status)
-	}
-	var result responseToken
-	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
-		return "", err
-	}
-	return result.AccessToken, nil
-}
-
-func requestVehicleStatus() (vehicleStatus, error) {
-	// Create a new request with the GET method
-	request, err := http.NewRequest("GET", vehicleUrl, nil)
-	if err != nil {
-		fmt.Println("Error creating request:", err)
-		return vehicleStatus{}, err
-	}
-
-	// Set the Authorization header with the bearer token
-	request.Header.Set("Authorization", "Bearer "+accessToken)
-
-	// Create an HTTP client
-	client := &http.Client{}
-
-	// Send the request
-	response, err := client.Do(request)
-	if err != nil {
-		fmt.Println("Error making VehicleStatus request:", err)
-		return vehicleStatus{}, err
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode == http.StatusUnauthorized {
-		return vehicleStatus{}, ErrAuth
-	} else if response.StatusCode == http.StatusRequestTimeout {
-		return vehicleStatus{}, ErrOffline
-	} else if response.StatusCode != http.StatusOK {
-		return vehicleStatus{}, errors.New("Error: Unexpected status code " + response.Status)
-	}
-
-	// Decode the response body into the VehicleStatus struct
-	var vehicleStatusResponse vehicleStatus
-	if err := json.NewDecoder(response.Body).Decode(&vehicleStatusResponse); err != nil {
-		fmt.Println("Error decoding response body:", err)
-		return vehicleStatus{}, err
-	}
-	return vehicleStatusResponse, nil
-}
-
-type responseToken struct {
-	AccessToken string `json:"access_token"`
+	publishVehicleStatus(vehicleStatus)
 }
 
 type attributes struct {
 	Charging bool `json:"charging"`
 }
 
-func publishVehicleStatus(vehicleStatus vehicleStatus) {
+func publishVehicleStatus(vehicleStatus service.VehicleStatus) {
 	log.Infof("Publishing to queue: BatteryState=%d, Charging=%s",
 		vehicleStatus.Response.ChargeState.UsableBatteryLevel,
 		vehicleStatus.Response.ChargeState.ChargingState)
@@ -263,45 +172,4 @@ func publishVehicleStatus(vehicleStatus vehicleStatus) {
 	attributeAsJson, _ := json.Marshal(attributes)
 	mqttClient.Publish("/tesla/state/battery", 1, true, fmt.Sprintf("%d", vehicleStatus.Response.ChargeState.UsableBatteryLevel))
 	mqttClient.Publish("/tesla/state/charging", 1, true, attributeAsJson)
-}
-
-type body struct {
-	GrantType    string `json:"grant_type"`
-	ClientId     string `json:"client_id"`
-	RefreshToken string `json:"refresh_token"`
-	Scope        string `json:"scope"`
-}
-
-type chargeState struct {
-	UsableBatteryLevel int    `json:"usable_battery_level"`
-	ChargingState      string `json:"charging_state"`
-}
-
-type response struct {
-	ChargeState chargeState `json:"charge_state"`
-}
-
-type vehicleStatus struct {
-	Response response `json:"response"`
-}
-
-func connectMQTT(clientId string) mqtt.Client {
-	opts := createClientOptions(clientId)
-	client := mqtt.NewClient(opts)
-	token := client.Connect()
-	for !token.WaitTimeout(3 * time.Second) {
-	}
-	if err := token.Error(); err != nil {
-		log.Fatal(err)
-	}
-	return client
-}
-
-func createClientOptions(clientId string) *mqtt.ClientOptions {
-	opts := mqtt.NewClientOptions()
-	opts.AddBroker(fmt.Sprintf("tcp://%s:%d", mqttUrl, 1883))
-	opts.SetUsername(mqttUser)
-	opts.SetPassword(mqttPass)
-	opts.SetClientID(clientId)
-	return opts
 }
