@@ -168,7 +168,7 @@ func publishVehicleStatus(vehicleStatus service.VehicleStatus) {
 	log.Infof("Publishing to queue: BatteryState=%d, Charging=%s",
 		vehicleStatus.Response.ChargeState.UsableBatteryLevel,
 		vehicleStatus.Response.ChargeState.ChargingState)
-	attributes := attributes{Charging: vehicleStatus.Response.ChargeState.ChargingState == "Charging"}
+	attributes := attributes{Charging: vehicleStatus.Response.ChargeState.ChargingState == "Charging" || vehicleStatus.Response.ChargeState.ChargingState == "NoPower"}
 	attributeAsJson, _ := json.Marshal(attributes)
 	mqttClient.Publish("/tesla/state/battery", 1, true, fmt.Sprintf("%d", vehicleStatus.Response.ChargeState.UsableBatteryLevel))
 	mqttClient.Publish("/tesla/state/charging", 1, true, attributeAsJson)
