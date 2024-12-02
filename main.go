@@ -4,10 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/oysteinl/tesla-client/service"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/oysteinl/tesla-client/service"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/joho/godotenv"
@@ -31,8 +32,6 @@ var mqttPassExists bool
 
 var accessToken string
 var mqttClient mqtt.Client
-
-var homeAndAwayTracker HomeAndAwayTracker
 
 type HomeAndAwayTracker struct {
 	mu   sync.Mutex
@@ -75,60 +74,42 @@ func init() {
 func main() {
 	log.Info("Starting tesla-client")
 	keepAlive := make(chan os.Signal)
-	listen()
-	defer mqttClient.Disconnect(500)
+	// Channel to signal termination (optional, for a clean exit)
+	mqttClient = service.ConnectMQTT("teslaClient", mqttUser, mqttPass, mqttUrl)
+	// Start the polling routine
+	go poller()
+	fetchDataAndPublishState()
 	<-keepAlive
 }
 
-func listen() {
-	mqttClient = service.ConnectMQTT("teslaClient", mqttUser, mqttPass, mqttUrl)
-	mqttClient.Subscribe(mqttAliveTopic, 0, mqttAliveCallback)
-}
+func poller() {
+	interval := 15 * time.Minute
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 
-var done = make(chan bool)
-
-func mqttAliveCallback(_ mqtt.Client, msg mqtt.Message) {
-	payload := string(msg.Payload())
-	log.Infof("* [%s] %s\n", msg.Topic(), payload)
-
-	if payload == "home" {
-		if homeAndAwayTracker.home {
-			return //Already home
-		}
-		time.Sleep(10 * time.Second) //Wait to let the vehicle come online
-		fetchDataAndPublishState()
-		//Start scheduled fetches every 10 min
-		ticker := time.NewTicker(10 * time.Minute)
-		go func() {
-			for {
-				select {
-				case <-done:
-					ticker.Stop()
-					log.Debug("Ticker stopped")
-					return
-				case <-ticker.C:
-					log.Debug("Tick received")
-					fetchDataAndPublishState()
-				}
+	for {
+		select {
+		case <-ticker.C:
+			// Call the function and decide the interval
+			if fetchDataAndPublishState() {
+				log.Info("Changing interval to 5 minutes.")
+				ticker.Reset(5 * time.Minute)
+			} else {
+				log.Info("Continuing with 15-minute interval.")
+				ticker.Reset(15 * time.Minute)
 			}
-		}()
-		homeAndAwayTracker.SetHome(true)
-	} else if payload == "not_home" {
-		if !homeAndAwayTracker.home {
-			return //Already away
 		}
-		//Cancel scheduled fetches
-		done <- true
-		homeAndAwayTracker.SetHome(false)
 	}
 }
 
-func fetchDataAndPublishState() {
+func fetchDataAndPublishState() bool {
+
 	log.Info("Fetching vehicle status")
 	if accessToken == "" {
 		token, err := service.FetchAccessToken(refreshToken, refreshTokenUrl)
 		if err != nil {
 			log.Error(err)
+			return false
 		} else {
 			accessToken = token
 		}
@@ -141,23 +122,24 @@ func fetchDataAndPublishState() {
 			token, err := service.FetchAccessToken(refreshToken, refreshTokenUrl)
 			if err != nil {
 				log.Error(err)
-				return
+				return false
 			}
 			accessToken = token
 			vehicleStatus, err = service.RequestVehicleStatus(accessToken, vehicleUrl)
 			if err != nil {
 				log.Error(err)
-				return
+				return false
 			}
 		} else if errors.Is(err, service.ErrOffline) {
 			log.Info("Vehicle offline, backing off")
-			return
+			return false
 		} else {
 			log.Error(err)
-			return
+			return false
 		}
 	}
 	publishVehicleStatus(vehicleStatus)
+	return true
 }
 
 type attributes struct {
