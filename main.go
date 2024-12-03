@@ -23,8 +23,6 @@ var refreshToken string
 var refreshTokenExists bool
 var mqttUrl string
 var mqttUrlExists bool
-var mqttAliveTopic string
-var mqttAliveTopicExists bool
 var mqttUser string
 var mqttUserExists bool
 var mqttPass string
@@ -62,11 +60,10 @@ func init() {
 	refreshTokenUrl, refreshTokenUrlExists = os.LookupEnv("REFRESH_TOKEN_URL")
 	refreshToken, refreshTokenExists = os.LookupEnv("REFRESH_TOKEN")
 	mqttUrl, mqttUrlExists = os.LookupEnv("MQTT_URL")
-	mqttAliveTopic, mqttAliveTopicExists = os.LookupEnv("MQTT_ALIVE_TOPIC")
 	mqttUser, mqttUserExists = os.LookupEnv("MQTT_USER")
 	mqttPass, mqttPassExists = os.LookupEnv("MQTT_PASSWORD")
 
-	if !vehicleUrlExists || !mqttUrlExists || !refreshTokenUrlExists || !mqttUserExists || !mqttPassExists || !refreshTokenExists || !mqttAliveTopicExists {
+	if !vehicleUrlExists || !mqttUrlExists || !refreshTokenUrlExists || !mqttUserExists || !mqttPassExists || !refreshTokenExists {
 		panic("Env variables not set")
 	}
 }
@@ -88,17 +85,15 @@ func poller() {
 	defer ticker.Stop()
 
 	for {
-		select {
-		case <-ticker.C:
-			// Call the function and decide the interval
-			if fetchDataAndPublishState() {
-				log.Info("Changing interval to 5 minutes.")
-				ticker.Reset(5 * time.Minute)
-			} else {
-				log.Info("Continuing with 15-minute interval.")
-				ticker.Reset(15 * time.Minute)
-			}
+		<-ticker.C
+		if fetchDataAndPublishState() {
+			log.Info("Changing interval to 5 minutes.")
+			ticker.Reset(5 * time.Minute)
+		} else {
+			log.Info("Continuing with 15-minute interval.")
+			ticker.Reset(15 * time.Minute)
 		}
+
 	}
 }
 
