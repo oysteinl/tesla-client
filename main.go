@@ -139,13 +139,17 @@ func fetchDataAndPublishState() bool {
 
 type attributes struct {
 	Charging bool `json:"charging"`
+	Driving  bool `json:"driving"`
 }
 
 func publishVehicleStatus(vehicleStatus service.VehicleStatus) {
-	log.Infof("Publishing to queue: BatteryState=%d, Charging=%s",
+	log.Infof("Publishing to queue: BatteryState=%d, Charging=%s ShiftState=%s",
 		vehicleStatus.Response.ChargeState.UsableBatteryLevel,
-		vehicleStatus.Response.ChargeState.ChargingState)
-	attributes := attributes{Charging: vehicleStatus.Response.ChargeState.ChargingState == "Charging" || vehicleStatus.Response.ChargeState.ChargingState == "NoPower"}
+		vehicleStatus.Response.ChargeState.ChargingState,
+		vehicleStatus.Response.DriveState.ShiftState)
+	attributes := attributes{
+		Charging: vehicleStatus.Response.ChargeState.ChargingState == "Charging" || vehicleStatus.Response.ChargeState.ChargingState == "NoPower",
+		Driving:  vehicleStatus.Response.DriveState.ShiftState == "D" || vehicleStatus.Response.DriveState.ShiftState == "R"}
 	attributeAsJson, _ := json.Marshal(attributes)
 	mqttClient.Publish("/tesla/state/battery", 1, true, fmt.Sprintf("%d", vehicleStatus.Response.ChargeState.UsableBatteryLevel))
 	mqttClient.Publish("/tesla/state/charging", 1, true, attributeAsJson)

@@ -10,11 +10,15 @@ type VehicleStatus struct {
 
 type Response struct {
 	ChargeState ChargeState `json:"charge_state"`
+	DriveState  DriveState  `json:"drive_state"`
 }
 
 type ChargeState struct {
 	UsableBatteryLevel int    `json:"usable_battery_level"`
 	ChargingState      string `json:"charging_state"`
+}
+type DriveState struct {
+	ShiftState string `json:"shift_state"`
 }
 
 type body struct {
