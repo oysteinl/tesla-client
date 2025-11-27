@@ -1,6 +1,6 @@
 module github.com/oysteinl/tesla-client
 
-go 1.18
+go 1.23.0
 
 require (
 	github.com/eclipse/paho.mqtt.golang v1.4.3
