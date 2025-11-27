@@ -127,7 +127,10 @@ func fetchDataAndPublishState() bool {
 			}
 		} else if errors.Is(err, service.ErrOffline) {
 			log.Info("Vehicle offline, backing off")
-			return false
+			vehicleStatus.Response.ChargeState.ChargingState = "Disconnected"
+			vehicleStatus.Response.DriveState.ShiftState = "P"
+			vehicleStatus.Response.ChargeState.UsableBatteryLevel = -1
+			//return false
 		} else {
 			log.Error(err)
 			return false
@@ -151,6 +154,8 @@ func publishVehicleStatus(vehicleStatus service.VehicleStatus) {
 		Charging: vehicleStatus.Response.ChargeState.ChargingState == "Charging" || vehicleStatus.Response.ChargeState.ChargingState == "NoPower",
 		Driving:  vehicleStatus.Response.DriveState.ShiftState == "D" || vehicleStatus.Response.DriveState.ShiftState == "R"}
 	attributeAsJson, _ := json.Marshal(attributes)
-	mqttClient.Publish("/tesla/state/battery", 1, true, fmt.Sprintf("%d", vehicleStatus.Response.ChargeState.UsableBatteryLevel))
+	if vehicleStatus.Response.ChargeState.UsableBatteryLevel != -1 {
+		mqttClient.Publish("/tesla/state/battery", 1, true, fmt.Sprintf("%d", vehicleStatus.Response.ChargeState.UsableBatteryLevel))
+	}
 	mqttClient.Publish("/tesla/state/charging", 1, true, attributeAsJson)
 }
